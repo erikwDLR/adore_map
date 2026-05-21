@@ -437,26 +437,118 @@ Route::refine_s_with_arc( const PLike& pos, double coarse_s ) const
   return refined_s;
 }
 
-// function to get s on route for a given state, used for shifted routes in obstacle avoidance
+// // function to get s on route for a given state, used for shifted routes in obstacle avoidance
+// template <typename State>
+// double get_s_on_reference_line_segments(
+//   const map::Route& route,
+//   const State& state,
+//   double coarse_s,
+//   double search_window = 20.0 )
+// {
+//   if( route.reference_line.size() < 2 )
+//   {
+//     return std::numeric_limits<double>::infinity();
+//   }
+
+//   const double s_min = coarse_s - search_window;
+//   const double s_max = coarse_s + search_window;
+
+//   auto it = route.reference_line.lower_bound( s_min );
+//   if( it == route.reference_line.end() )
+//   {
+//     return route.reference_line.rbegin()->first;
+//   }
+
+//   if( it != route.reference_line.begin() )
+//   {
+//     --it;
+//   }
+
+//   double best_s = it->first;
+//   double best_d2 = std::numeric_limits<double>::max();
+
+//   auto next = std::next( it );
+
+//   for( ; next != route.reference_line.end(); ++it, ++next )
+//   {
+//     const double s0 = it->first;
+//     const double s1 = next->first;
+
+//     if( s0 > s_max )
+//     {
+//       break;
+//     }
+
+//     const auto& p0 = it->second;
+//     const auto& p1 = next->second;
+
+//     const double vx = p1.x - p0.x;
+//     const double vy = p1.y - p0.y;
+//     const double wx = state.x - p0.x;
+//     const double wy = state.y - p0.y;
+
+//     const double len2 = vx * vx + vy * vy;
+//     if( len2 < 1e-9 )
+//     {
+//       continue;
+//     }
+
+//     double t = ( wx * vx + wy * vy ) / len2;
+//     t = std::clamp( t, 0.0, 1.0 );
+
+//     const double px = p0.x + t * vx;
+//     const double py = p0.y + t * vy;
+
+//     const double dx = state.x - px;
+//     const double dy = state.y - py;
+//     const double d2 = dx * dx + dy * dy;
+
+//     if( d2 < best_d2 )
+//     {
+//       best_d2 = d2;
+//       best_s = s0 + t * ( s1 - s0 );
+//     }
+//   }
+
+//   return best_s;
+// }
+
 template <typename State>
 double get_s_on_reference_line_segments(
   const map::Route& route,
   const State& state,
   double coarse_s,
-  double search_window = 20.0 )
+  double search_window = 20.0,
+  double max_projection_distance = std::numeric_limits<double>::infinity() )
 {
   if( route.reference_line.size() < 2 )
   {
     return std::numeric_limits<double>::infinity();
   }
 
-  const double s_min = coarse_s - search_window;
-  const double s_max = coarse_s + search_window;
+  if( !std::isfinite( state.x ) || !std::isfinite( state.y ) )
+  {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  if( !std::isfinite( coarse_s ) )
+  {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  search_window = std::max( 0.0, search_window );
+
+  const double route_first_s = route.reference_line.begin()->first;
+  const double route_last_s  = route.reference_line.rbegin()->first;
+
+  const double s_min = std::max( route_first_s, coarse_s - search_window );
+  const double s_max = std::min( route_last_s,  coarse_s + search_window );
 
   auto it = route.reference_line.lower_bound( s_min );
+
   if( it == route.reference_line.end() )
   {
-    return route.reference_line.rbegin()->first;
+    return std::numeric_limits<double>::infinity();
   }
 
   if( it != route.reference_line.begin() )
@@ -464,8 +556,9 @@ double get_s_on_reference_line_segments(
     --it;
   }
 
-  double best_s = it->first;
-  double best_d2 = std::numeric_limits<double>::max();
+  double best_s  = std::numeric_limits<double>::infinity();
+  double best_d2 = std::numeric_limits<double>::infinity();
+  bool found_projection = false;
 
   auto next = std::next( it );
 
@@ -479,8 +572,19 @@ double get_s_on_reference_line_segments(
       break;
     }
 
+    if( s1 < s_min )
+    {
+      continue;
+    }
+
     const auto& p0 = it->second;
     const auto& p1 = next->second;
+
+    if( !std::isfinite( p0.x ) || !std::isfinite( p0.y ) ||
+        !std::isfinite( p1.x ) || !std::isfinite( p1.y ) )
+    {
+      continue;
+    }
 
     const double vx = p1.x - p0.x;
     const double vy = p1.y - p0.y;
@@ -505,12 +609,24 @@ double get_s_on_reference_line_segments(
 
     if( d2 < best_d2 )
     {
+      found_projection = true;
       best_d2 = d2;
       best_s = s0 + t * ( s1 - s0 );
     }
   }
 
-  return best_s;
+  if( !found_projection || !std::isfinite( best_s ) )
+  {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  if( std::isfinite( max_projection_distance ) &&
+      best_d2 > max_projection_distance * max_projection_distance )
+  {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  return std::clamp( best_s, route_first_s, route_last_s );
 }
 
 } // namespace map
